@@ -30,7 +30,7 @@ jobs:
         run: |
           set -eo pipefail
 
-          # On a PR, diff against the base (target) SHA 
+          # On a PR, diff against the base (target) SHA
           if [ "$EVENT_NAME" = "pull_request" ]; then
             export DIFF_BASE="$BASE_SHA"
           else
@@ -146,13 +146,39 @@ jobs:
         with:
           name: "Test Results ${{ matrix.V2PROV_TEST_DIST }} ${{ steps.test_output.outputs.suite }}"
           path: "/tmp/report-${{ matrix.V2PROV_TEST_DIST }}-${{ steps.test_output.outputs.suite }}.*"
-      - name: Upload logdump artifact if we had some tests failures
+      - name: Prepare Cowboy input
         if: failure()
+        run: |
+          set -eu
+          input_file="provisioning-cowboy-input.txt"
+          : > "$input_file"
+          for source in provtest_output.txt build/rancher.log build/testdata/k3s.log; do
+            if [ -f "$source" ]; then
+              cat "$source" >> "$input_file"
+              printf '\n' >> "$input_file"
+            else
+              echo "Cowboy input source not found: $source" >&2
+            fi
+          done
+      - name: Process structured provisioning diagnostics with Cowboy
+        if: failure()
+        continue-on-error: true
         uses: rancherlabs/cowboy@61de86d99456805424f9af0dadfcf362413cd745 # v0.0.2
         with:
-          log-file-path: provtest_output.txt
+          log-file-path: provisioning-cowboy-input.txt
           artifact-retention-days: 7
           artifact-name: "Parsed Failure Log Dump (${{ matrix.V2PROV_TEST_DIST }}, ${{ steps.test_output.outputs.suite }})"
+      - name: Upload provisioning diagnostics on failure
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: "Provisioning Diagnostics (${{ matrix.V2PROV_TEST_DIST }}, ${{ steps.test_output.outputs.suite }})"
+          path: |
+            build/rancher.log
+            build/testdata/k3s.log
+          retention-days: 7
+          if-no-files-found: ignore
 
   # provisioning_tests_summary prints a friendly summary of what tests ran. It's true purpose
   # is to act as an anchor, giving us a single check that forwards the results of the dynamic matrix
@@ -171,12 +197,12 @@ jobs:
         shell: bash
         run: |
           echo "Provisioning Test Summary"
-          echo "--------------------------------"        
+          echo "--------------------------------"
           if [[ "${SETUP_MATRIX_RESULT}" != "success" && "${SETUP_MATRIX_RESULT}" != "skipped" ]]; then
             echo "Failed to setup test matrix."
             exit 1
           fi
-          
+
           if [[ "${PROVISIONING_TESTS_RESULT}" != "success" && "${PROVISIONING_TESTS_RESULT}" != "skipped" ]]; then
             echo "Some provisioning tests failed. Please check the logs for details."
             exit 1
